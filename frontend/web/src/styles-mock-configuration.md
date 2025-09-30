@@ -1,4 +1,4 @@
-# base-local-account
+# email-adapter-resolver
 
 This is an auto-generated documentation file.
 

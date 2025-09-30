@@ -1,135 +1,132 @@
-# DAOPrivacyVotingFHE
+# FHE Governance & Voting — Shareholders’ Meeting (Privacy-Preserving)
 
-Privacy-preserving DAO proposal voting powered by Fully Homomorphic Encryption (FHE) on **fhEVM** (Zama).  
-Individual ballots remain encrypted end-to-end; only **aggregate results** (if policy allows) may be decrypted under threshold control, or the system can run in **minimal disclosure** mode with ZK proofs.
+A production-oriented specification and reference implementation for **shareholders’ meeting voting** that preserves ballot privacy using the **FHE (Fully Homomorphic Encryption)** workflow. It supports multi‑model vote weighting (one‑share‑one‑vote, token‑weighted, quadratic), auditable lifecycle, and a **universal KV interface** so frontends can integrate without knowing the contract ABI.
 
-> Version: 1.0.0 • Build date: 2025-09-30 11:45:02 UTC
-
----
-
-## ✨ Key Features
-
-- **Encrypted ballots on-chain** using fhEVM `euint`/`ebool` types
-- **Homomorphic tallying** (sum/argmax) without decrypting ballots
-- Multiple voting modes:
-  - Single-choice / Multi-choice
-  - **Token-weighted** (snapshot block)
-  - **Quadratic voting** (client transforms with sqrt under ZK)
-  - (Optional) Ranked choice (Borda-like, client computes encrypted scores)
-- **Anti-sybil** with eligibility nullifiers & Merkle allowlist placeholder
-- **Overwrite before deadline** (last-vote-wins) and **delegation** (private choice)
-- **Disclosure policies**:
-  - **Minimal**: Publish ZK proof + ordering/winner only
-  - **AggregateOnly**: Threshold decrypt aggregate tallies *only*
+> This repository contains:
+> - `FHE_Governance_Voting.sol` — Solidity contract (≥300 lines) with a universal KV store (`isAvailable`, `setData`, `getData`) plus complete governance data structures (proposals, encrypted ballots, nullifiers, aggregated results, proof blob).
+> - A React front‑end (provided separately) that only uses the KV interface and stores JSON blobs at keys like `gv_proposal_*` and `gv_result_*`.
+>
+> Real cryptography: replace the ciphertext/aggregation placeholders with **Zama FHE** client encryption + on‑chain verification or ZK proofs.
 
 ---
 
-## 🧱 File List
+## 1) Problem Statement (User Pain Points)
 
-- `DAOPrivacyVotingFHE.sol` — fhEVM-compatible Solidity contract (≥300 LOC)
-- `README.md` — this document
-
-Download:
-- [DAOPrivacyVotingFHE.sol](sandbox:/mnt/data/DAOPrivacyVotingFHE.sol)
-- [README.md](sandbox:/mnt/data/README.md)
+- **Privacy exposure** — On‑chain votes are typically public and can bias decisions or enable coercion/bribery.  
+- **Uneven weights** — Shareholders have different ownership levels; calculating trusted, auditable weights is non‑trivial.  
+- **Auditability** — Traditional online voting lacks transparent, tamper‑proof audit trails.  
+- **Compliance** — Corporate governance needs provable integrity and immutable records.
 
 ---
 
-## ⚠️ Prerequisites
+## 2) Solution (FHE‑Based)
 
-This repository targets **Zama fhEVM**. Ensure you have:
-- fhEVM-compatible toolchain and network
-- Access to `TFHE` library and encrypted types (`euintXX`, `ebool`)
-- A prover/verifier stack for the ZK proofs referenced here (not included)
+- **Private Ballots** — Each voter submits an **encrypted ballot**; no plaintext choice is ever stored.  
+- **Encrypted Aggregation** — Only **final totals** and a **proof blob** are published after the deadline.  
+- **Weighting Models** — One‑share‑one‑vote, **token‑weighted**, and **quadratic** voting supported.  
+- **Compliance Storage** — The full lifecycle is on‑chain, generating **immutable audit logs**.
 
-> The contract ships with **TFHE stubs** so it can pass generic Solidity linters.  
-> When compiling for fhEVM, **remove stubs** and import real fhEVM headers instead.
+> The reference contract is structured for an FHE workflow: ciphertexts on‑chain, homomorphic tallying off‑chain, results + proofs on‑chain.
 
 ---
 
-## 🚀 Deploy
+## 3) Architecture
 
-1. Configure your fhEVM RPC/chain and compiler.
-2. Compile and deploy `DAOPrivacyVotingFHE.sol`.
-3. (Optional) Set a timelock executor:
-   ```solidity
-   setTimelock(0xYourTimelock);
+### On‑chain (Solidity)
+- **KV Interface (Frontend Contract Spec)**  
+  - `isAvailable()` → health check  
+  - `setData(key, bytes)` → write arbitrary bytes under `key`  
+  - `getData(key)` → read bytes from `key`  
+  The React app uses JSON (UTF‑8) payloads under keys:
+  - `gv_proposal_keys` — JSON array of ids  
+  - `gv_proposal_<id>` — JSON of proposal metadata  
+  - `gv_result_<id>` — JSON of aggregated totals + proof
+
+- **Governance Model**  
+  - `createProposal()` → define title, description, options, deadline, weight model  
+  - `submitEncryptedBallot()` → upload ciphertext + **nullifier** (prevents duplicates)  
+  - `publishAggregatedResult()` → store totals (for/against/abstain), `totalWeight`, and `proof`  
+  - Optional `weightToken` (ERC‑20) and `registeredShares` mapping for weights
+
+### Off‑chain (FHE & Services)
+- **Encryption** — Zama FHE client encrypts each voter’s choice; ciphertext posted via `submitEncryptedBallot` or stored by the frontend inside the KV (`setData`).  
+- **Aggregation** — Off‑chain service tallies ciphertexts homomorphically and generates a proof.  
+- **Result Publication** — Organizer posts `publishAggregatedResult` and mirrors JSON into KV for the frontend to display.
+
+---
+
+## 4) Frontend (React) — Integration Notes
+
+- Use only `getContractReadOnly()` and `getContractWithSigner()` helpers (no manual `new ethers.Contract`).  
+- Health check via `isAvailable()` (no writes).  
+- Writes go through `setData(key, bytes)`; reads use `getData(key)` and decode bytes → UTF‑8 JSON.  
+- Recommended keys (already used in the sample UI):
+  - `gv_proposal_keys`
+  - `gv_proposal_<id>`
+  - `gv_result_<id>`
+  - `gv_vote_<id>_<address-lc>` (optional per‑voter record for “has voted” indicator)
+
+---
+
+## 5) Install & Build
+
+### Prerequisites
+- Node.js 18+  
+- pnpm / npm / yarn  
+- Solidity ^0.8.24 toolchain (Hardhat/Foundry)
+
+### Quick Start (Hardhat)
+1. Add the contract to your project:
+   - `contracts/FHE_Governance_Voting.sol`
+2. Compile:
+   - `npx hardhat compile`
+3. Deploy (example):
+   ```ts
+   // scripts/deploy.ts
+   import { ethers } from "hardhat";
+   async function main() {
+     const Factory = await ethers.getContractFactory("FHE_Governance_Voting");
+     const tokenForWeights = "0x0000000000000000000000000000000000000000"; // or ERC20 address
+     const inst = await Factory.deploy(ethers.ZeroAddress, tokenForWeights);
+     await inst.waitForDeployment();
+     console.log("FHE_Governance_Voting:", await inst.getAddress());
+   }
+   main().catch((e) => { console.error(e); process.exit(1); });
    ```
+4. Frontend:
+   - Use your existing `getContractReadOnly()` / `getContractWithSigner()` wired to the deployed address/ABI.
 
 ---
 
-## 🗳️ Workflow Overview
+## 6) Usage Flow
 
-1. **Create proposal**
-   ```solidity
-   ProposalMeta meta = ProposalMeta(
-     "Title",
-     "Description",
-     startTs,
-     endTs,
-     bufferTs,                 // anti-rush window
-     VoteType.SingleChoice,    // or MultiChoice/Quadratic/TokenWeighted/RankedChoice
-     Disclosure.Minimal,       // or AggregateOnly
-     optionCount,
-     snapshotBlock,
-     eligibilityMerkle,
-     true,   // enableOverwrite
-     true,   // enableDelegation
-     true    // exists (set internally)
-   );
-   createProposal(meta);
-   ```
-
-2. **Submit encrypted ballots**
-   - Client builds encrypted vector `euint64[optionCount]`:
-     - Single-choice: one-hot
-     - Quadratic: sqrt(stake) encoded under ZK
-   - Produce ZK proofs of *valid vote* and (if needed) *weight correctness*.
-   - Call `submitBallot(pid, nullifier, cipher)` to store opaque ciphertext for auditing.
-   - Optionally call `accumulateEncryptedVector(pid, encVector)` periodically (aggregator/relayer).
-
-3. **Finalize**
-   - After `endTs + bufferTs`, call `finalize(pid)`.
-   - If `Disclosure.Minimal`: publish ZK showing correct ordering & winner.
-   - If `AggregateOnly`: committee threshold-decrypts **only** aggregate tallies and publishes values.
+1. Organizer **creates a proposal** (`createProposal`).  
+2. Shareholders **submit encrypted ballots** (`submitEncryptedBallot`) with proper nullifiers.  
+3. After deadline, organizer posts **aggregated totals + proof** (`publishAggregatedResult`).  
+4. An off‑chain service (or the organizer) **mirrors JSON blobs into KV** (`setData`) so the generic UI can render lists and results.  
+5. Auditors verify the **proof** and the on‑chain event log.
 
 ---
 
-## 🔐 Eligibility & Anti-Sybil
+## 7) Security & Compliance
 
-- **Eligibility nullifier**: `bytes32` per identity; contract enforces 1 ballot per nullifier.
-- **Overwrite** allowed if enabled: last ballot is effective; earlier ones are invalidated.
-- **Merkle allowlist** placeholder via `setAllowlistRoot` (verify proofs in a separate verifier or with ZK).
-
----
-
-## 🧮 Tallies & Decryption
-
-- Tallies are stored as encrypted vectors `euint64[]` per proposal.
-- Use `allowAggregateView(pid, viewer)` to grant aggregate decryption *if policy permits*.
-- Never decrypt individual ballots.
+- **No plaintext ballots on‑chain**; only ciphertext and totals.  
+- **Nullifier** prevents duplicate voting per proposal and address.  
+- **Immutable logs** — Every step emits events for audits.  
+- **Pluggable weighting** — Use ERC‑20 balances or registered shares.  
+- **Replaceable crypto** — Swap the placeholder with real FHE client + on‑chain verification when available.
 
 ---
 
-## 📦 Front-End Hooks
+## 8) Future Enhancements
 
-- `isAvailable()` for health check.
-- `getProposal(pid)` / `getEncryptedTally(pid)` for UI rendering.
-- `hasVoted(pid, addr)` / `ballotMeta(pid, addr)` for participation UX.
-- `submitBallot(...)` and `accumulateEncryptedVector(...)` for voting/aggregation.
-
-> Pair this contract with your existing `WalletManager`, `WalletSelector`, and fhEVM-ready provider.
-
----
-
-## 🛡️ Notes & Limitations
-
-- The on-chain argmax and vector arithmetic are **outlined**; use real TFHE ops in fhEVM.
-- ZK circuits and verifiers are not included; integrate your stack (Circom/Halo2/etc.).
-- Gas/size of encrypted payloads require batching and/or an aggregator/rollup design.
+- On‑chain FHE helpers / precompiles (when supported).  
+- ZK proofs to attest that aggregation matches ciphertext set.  
+- Snapshot‑based token weighting at block height `N`.  
+- Off‑chain allowlists (soulbound, KYC‑based) with privacy‑preserving checks.  
+- Multi‑proposal batched finalization & IPFS/Arweave anchoring for artifacts.
 
 ---
 
-## 📄 License
-
-MIT
+**License:** MIT  
+**Author:** FHE Governance (2025)
